@@ -1,0 +1,107 @@
+#! /usr/bin/env ruby
+
+exec "vim" if ARGV.empty?
+
+require 'timeout'
+require 'open3'
+require 'time'
+
+VIM_MINUS_R_OUTPUT_LINES = {
+  /^\s*owned by: (.*?)\s+dated: (.*)$/ => [:owner, :date],
+  /^\s*file name: (.*)$/ => [:file],
+  /^\s*modified: (.*)$/ => [:modified],
+  /^\s*user name: (.*?)\s+host name: (.*)$/ => [:user, :host],
+  /^\s*process ID: (\d+)(?:\s+\((still running)\)|())$/ => [:pid, :running],
+}
+
+class SwapFile < Struct.new(:swap, *VIM_MINUS_R_OUTPUT_LINES.values.flatten); end
+
+def get_vim_swap_files()
+  out, err, status = Timeout.timeout(3) do Open3.capture3("vim", "-r") end
+  raise "vim -r exit status: #{status}\n#{err}" unless status.success?
+
+  dir = nil
+  swap_files = []
+  cur = nil
+  # if you put newlines into your filenames you only have yourself to blame
+  err.each_line do |line|
+    line.chomp!
+    next if line.empty?
+    if m = /^   In directory (.*?):$/.match(line)
+      dir = m.captures.first
+      if cur
+        swap_files << cur
+        cur = nil
+      end
+    elsif m = /^   In current directory:$/.match(line)
+      dir = "."
+      if cur
+        swap_files << cur
+        cur = nil
+      end
+    elsif /^\s*-- none --$/.match(line)
+      raise "should have dir" unless dir
+      dir = nil
+      raise "shouldn't have cur" if cur
+      next
+    elsif m = /^\d+\.\s+(.*)/.match(line)
+      raise "should have dir" unless dir
+      swap_files << cur if cur
+      cur = SwapFile.new
+      cur.swap = "#{dir}/#{m.captures.first}"
+    elsif cur
+      ok = VIM_MINUS_R_OUTPUT_LINES.each do |re, syms|
+        next unless m = re.match(line)
+
+        [syms, m.captures.compact].transpose.each do |k, v|
+          cur[k] = v
+        end
+
+        break true
+      end
+      raise "weird line: #{line.inspect}" unless ok
+    end
+  end
+
+  swap_files << cur if cur
+
+  home = ENV["HOME"]
+  if !home && user = ENV["USER"]
+    home = "/home/#{ENV["USER"]}"
+  end
+  home += "/"
+
+  swap_files.each do |s|
+    s.swap = File.expand_path(s.swap)
+    s.date = Time.parse(s.date)
+    s.file = File.expand_path(s.file)
+    s.file = nil if s.file == "[No Name]"
+    s.modified = s.modified == "YES"
+    s.pid = s.pid.to_i
+    s.running = !s.running.empty?
+  end
+
+  swap_files
+end
+
+def foreground(file, pid)
+  window_id = File.read("/proc/#{pid}/environ").split("\0").find{|l|l.start_with?("WINDOWID=")}.split("=", 2).last.to_i
+  unless system("wmctrl", "-i", "-a", window_id.to_s)
+    raise "wmctrl failed to raise window #{window_id} for pid #{pid}"
+  end
+  puts "#{file}: activated existing window #{window_id}"
+end
+
+unless ARGV.empty?
+  swap_files = get_vim_swap_files()
+
+  swap_files.delete_if { |s| !s.running }
+
+  ARGV.delete_if { |f|
+    next unless s = swap_files.find{|s| File.identical?(s.file, f)}
+    foreground(f, s.pid)
+    true
+  }
+end
+
+exec "vim", *ARGV unless ARGV.empty?
