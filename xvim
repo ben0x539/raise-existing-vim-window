@@ -16,7 +16,15 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-exec "vim" if ARGV.empty?
+def run_urxvt(*cmd)
+  spawn("urxvt", "-e", *cmd,
+    pgroup: true,
+    in: "/dev/null",
+    out: "/dev/null",
+  )
+end
+
+run_urxvt "vim" if ARGV.empty?
 
 require 'timeout'
 require 'open3'
@@ -120,4 +128,4 @@ unless ARGV.empty?
   }
 end
 
-exec "vim", *ARGV unless ARGV.empty?
+run_urxvt "vim", *ARGV unless ARGV.empty?
