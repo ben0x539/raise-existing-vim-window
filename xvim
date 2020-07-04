@@ -35,7 +35,7 @@ VIM_MINUS_R_OUTPUT_LINES = {
   /^\s*file name: (.*)$/ => [:file],
   /^\s*modified: (.*)$/ => [:modified],
   /^\s*user name: (.*?)\s+host name: (.*)$/ => [:user, :host],
-  /^\s*process ID: (\d+)(?:\s+\((still running)\)|())$/ => [:pid, :running],
+  /^\s*process ID: (\d+)(?:\s+\((still running)\)|())$/i => [:pid, :running],
 }
 
 class SwapFile < Struct.new(:swap, *VIM_MINUS_R_OUTPUT_LINES.values.flatten); end
