@@ -41,7 +41,7 @@ VIM_MINUS_R_OUTPUT_LINES = {
   /^\s*process ID: (\d+)(?:\s+\((still running)\)|())$/i => [:pid, :running],
 }
 
-class SwapFile < Struct.new(:swap, *VIM_MINUS_R_OUTPUT_LINES.values.flatten); end
+class SwapFile < Struct.new(:swap, *VIM_MINUS_R_OUTPUT_LINES.values.flatten, :cwd); end
 
 def get_vim_swap_files()
   out, err, status = Timeout.timeout(3) do Open3.capture3("vim", "-r") end
@@ -101,34 +101,109 @@ def get_vim_swap_files()
   swap_files.each do |s|
     s.swap = File.expand_path(s.swap)
     s.date = Time.parse(s.date)
-    s.file = File.expand_path(s.file)
     s.file = nil if s.file == "[No Name]"
+    s.file &&= maybe_realpath(File.expand_path(s.file))
     s.modified = s.modified == "YES"
     s.pid = s.pid.to_i
     s.running = s.running && !s.running.empty?
+    s.cwd = s.running && File.readlink("/proc/#{s.pid}/cwd")
   end
 
   swap_files
 end
 
-def foreground(file, pid)
-  window_id = File.read("/proc/#{pid}/environ").split("\0").find{|l|l.start_with?("WINDOWID=")}.split("=", 2).last.to_i
-  unless system("wmctrl", "-i", "-a", window_id.to_s)
-    raise "wmctrl failed to raise window #{window_id} for pid #{pid}"
-  end
-  puts "#{file}: activated existing window #{window_id} for pid #{pid}"
+def maybe_realpath(f)
+  return File.realpath(f) if File.exist?(f)
+  f
 end
 
-unless ARGV.empty?
-  swap_files = get_vim_swap_files()
+def foreground(file, s)
+  window_id = File.read("/proc/#{s.pid}/environ").split("\0").find{|l|l.start_with?("WINDOWID=")}.split("=", 2).last.to_i
+  label = "process #{s.pid} for window #{window_id}"
+  unless system("wmctrl", "-i", "-a", window_id.to_s, err: "/dev/null")
+    STDERR.puts "#{file}: wmctrl failed to activate #{label}"
+    return false
+  end
+  #STDERR.puts "#{file}: activated #{label}"
+  true
+end
 
-  swap_files.delete_if { |s| !s.running }
+def contains(dir, path, recursive)
+  if recursive
+    dir += "/" unless dir.end_with?("/")
+    path.start_with?(dir)
+  else
+    File.dirname(path) == dir
+  end
+end
 
-  ARGV.delete_if { |f|
-    next unless s = swap_files.find{|s| File.identical?(s.file, f)}
-    foreground(f, s.pid)
-    true
+def matches_path(recursive, arg, s)
+  f = File.expand_path(arg)
+  r = maybe_realpath(f)
+
+  if s.file && s.file == r
+    STDERR.puts "#{arg}: found #{s.file}"
+    return true
+  end
+
+  if File.directory?(f)
+    # given path contains file or vim cwd
+    # TODO: is vim cwd gonna be annoying? put behind flag?
+    [f, r].each do |path|
+      if s.file && contains(path, s.file, recursive)
+        STDERR.puts "#{arg} contains file #{s.file}"
+        return true
+      elsif contains(path, "#{s.cwd}/.", recursive)
+        # ^^^^ append /. to ward off dirname ^^^^
+        msg = "#{arg} contains cwd #{s.cwd}"
+        msg << " for file #{s.file}" if s.file
+        STDERR.puts msg
+        return true
+      end
+    end
+  end
+
+  false
+end
+
+def matches_glob(arg, s)
+  return unless s.file
+
+  [arg, "**/#{arg}"].any? { |f|
+    if File.fnmatch(f, s.file, File::FNM_EXTGLOB | File::FNM_PATHNAME)
+      STDERR.puts "#{f}: matches #{s.file}"
+      true
+    end
   }
 end
 
-run_urxvt "vim", *ARGV unless ARGV.empty?
+recursive = ARGV.delete("-r")
+glob = ARGV.delete("-g")
+
+swap_files = get_vim_swap_files()
+
+swap_files.delete_if { |s| !s.running }
+
+ARGV.delete_if { |f|
+  ok = false
+  swap_files.delete_if { |s|
+    if glob && matches_glob(f, s)
+      ok = true if foreground(f, s)
+    elsif matches_path(recursive, f, s)
+      ok = true if foreground(f, s)
+    end
+  }
+  ok
+}
+
+ARGV.each { |f|
+  if glob
+    STDERR.puts "no match for #{f}"
+    true
+  elsif File.directory?(f) && f.end_with?("/")
+    STDERR.puts "not opening fresh vim for #{f}"
+    true
+  else
+    run_urxvt "vim", f
+  end
+}
