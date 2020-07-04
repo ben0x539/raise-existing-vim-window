@@ -24,7 +24,10 @@ def run_urxvt(*cmd)
   )
 end
 
-run_urxvt "vim" if ARGV.empty?
+if ARGV.empty?
+  run_urxvt "vim"
+  exit
+end
 
 require 'timeout'
 require 'open3'
@@ -102,7 +105,7 @@ def get_vim_swap_files()
     s.file = nil if s.file == "[No Name]"
     s.modified = s.modified == "YES"
     s.pid = s.pid.to_i
-    s.running = !s.running.empty?
+    s.running = s.running && !s.running.empty?
   end
 
   swap_files
@@ -113,7 +116,7 @@ def foreground(file, pid)
   unless system("wmctrl", "-i", "-a", window_id.to_s)
     raise "wmctrl failed to raise window #{window_id} for pid #{pid}"
   end
-  puts "#{file}: activated existing window #{window_id}"
+  puts "#{file}: activated existing window #{window_id} for pid #{pid}"
 end
 
 unless ARGV.empty?
