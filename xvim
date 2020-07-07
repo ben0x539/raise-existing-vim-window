@@ -179,12 +179,35 @@ end
 
 recursive = ARGV.delete("-r")
 glob = ARGV.delete("-g")
+line = ARGV.delete("-l")
+error_lines = ARGV.delete("-L")
 
 swap_files = get_vim_swap_files()
 
 swap_files.delete_if { |s| !s.running }
 
-ARGV.delete_if { |f|
+args = ARGV.dup
+
+if line
+  args.each_with_index do |a, i|
+    n = a.rindex(":")
+    args[i] = [a[0...n], a[n+1..-1]]
+  end
+end
+
+if error_lines
+  errors = {}
+  STDIN.each_line do |line|
+    m = line.match(/^(?:\s*)(?:--> )?([^:]+):(\d+):\d+:?(?:\s|$)/)
+    next unless m
+    f, l = m.captures
+    prev_l = errors[f]
+    errors[f] = l if !prev_l || prev_l > l
+  end
+  args += errors.map(&:to_a)
+end
+
+args.delete_if { |f, l|
   ok = false
   swap_files.delete_if { |s|
     if glob && matches_glob(f, s)
@@ -196,13 +219,15 @@ ARGV.delete_if { |f|
   ok
 }
 
-ARGV.each { |f|
+args.each { |f, l|
   if glob
     STDERR.puts "no match for #{f}"
     true
   elsif File.directory?(f) && f.end_with?("/")
     STDERR.puts "not opening fresh vim for #{f}"
     true
+  elsif l
+    run_urxvt "vim", "+#{l}", f
   else
     run_urxvt "vim", f
   end
