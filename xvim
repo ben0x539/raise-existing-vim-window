@@ -24,11 +24,6 @@ def run_urxvt(*cmd)
   )
 end
 
-if ARGV.empty?
-  run_urxvt "vim"
-  exit
-end
-
 require 'timeout'
 require 'open3'
 require 'time'
@@ -177,9 +172,36 @@ def matches_glob(arg, s)
   }
 end
 
+def extract_file_line(s)
+  patterns = [
+    # gcc:  "foo.c:15:8: blah blah" (probably other tools too)
+    /^([^\s:]+):(\d+):/,
+    # grep: "foo:blahblah" (this one kinda sucks)
+    /^([^\s:]+):/,
+    # rustc: "  --> foo.rs:42:3"
+    /^\s*--> ([^:]+):(\d+)\b/,
+    # git: "	both modified:   blah"
+    /^\tboth modified:\s*(.*)()/,
+  ]
+  patterns.each do |pattern|
+    m = pattern.match(s)
+    next unless m
+    f, l = m.captures
+    return f, l.to_i # "" -> 0
+  end
+  nil
+end
+
 recursive = ARGV.delete("-r")
 glob = ARGV.delete("-g")
 line = ARGV.delete("-l")
+
+if ARGV.empty?
+  run_urxvt "vim"
+  exit
+end
+
+# exit before here so we skip opening a vim if there's nothing on stdin
 error_lines = ARGV.delete("-L")
 
 swap_files = get_vim_swap_files()
@@ -198,13 +220,15 @@ end
 if error_lines
   errors = {}
   STDIN.each_line do |line|
-    m = line.match(/^(?:\s*)(?:--> )?([^:]+):(\d+):\d+:?(?:\s|$)/)
-    next unless m
-    f, l = m.captures
+    f, l = extract_file_line(line)
+    next unless l
     prev_l = errors[f]
     errors[f] = l if !prev_l || prev_l > l
   end
-  args += errors.map(&:to_a)
+  errors.each do |f, l|
+    next unless File.file?(f)
+    args << [f, l]
+  end
 end
 
 args.delete_if { |f, l|
@@ -222,11 +246,15 @@ args.delete_if { |f, l|
 args.each { |f, l|
   if glob
     STDERR.puts "no match for #{f}"
-    true
+    next
   elsif File.directory?(f) && f.end_with?("/")
     STDERR.puts "not opening fresh vim for #{f}"
-    true
-  elsif l
+    next
+  end
+
+  puts "opening #{f}" if glob || error_lines
+
+  if l
     run_urxvt "vim", "+#{l}", f
   else
     run_urxvt "vim", f
