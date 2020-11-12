@@ -36,7 +36,7 @@ VIM_MINUS_R_OUTPUT_LINES = {
   /^\s*process ID: (\d+)(?:\s+\((still running)\)|())$/i => [:pid, :running],
 }
 
-class SwapFile < Struct.new(:swap, *VIM_MINUS_R_OUTPUT_LINES.values.flatten, :cwd); end
+class SwapFile < Struct.new(:swap, *VIM_MINUS_R_OUTPUT_LINES.values.flatten, :cwd, :crashed); end
 
 def get_vim_swap_files()
   out, err, status = Timeout.timeout(3) do Open3.capture3("vim", "-r") end
@@ -93,6 +93,8 @@ def get_vim_swap_files()
   end
   home += "/"
 
+  uptime = File.read("/proc/uptime").split(/\s/, 2).first.to_f
+  boot_time = Time.now - uptime
   swap_files.each do |s|
     s.swap = File.expand_path(s.swap)
     s.date = Time.parse(s.date)
@@ -100,7 +102,14 @@ def get_vim_swap_files()
     s.file &&= maybe_realpath(File.expand_path(s.file))
     s.modified = s.modified == "YES"
     s.pid = s.pid.to_i
-    s.running = s.running && !s.running.empty?
+    s.running = s.running \
+      && !s.running.empty?
+      #&& File.read("/proc/#{s.pid}/cmdline").match(%r{^(?:[^\0]*/)?vim(?:\0|\$)})
+
+    if s.date < boot_time
+      s.crashed = true
+      s.running = false
+    end
     s.cwd = s.running && File.readlink("/proc/#{s.pid}/cwd")
   end
 
@@ -206,7 +215,12 @@ error_lines = ARGV.delete("-L")
 
 swap_files = get_vim_swap_files()
 
-swap_files.delete_if { |s| !s.running }
+swap_files.delete_if { |s|
+  if s.crashed
+    STDERR.puts "note: swap file \"#{s.swap}\" for path \"#{s.file}\", pid #{s.pid} predates last boot"
+  end
+  !s.running
+}
 
 args = ARGV.dup
 
