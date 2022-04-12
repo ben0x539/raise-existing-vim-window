@@ -226,8 +226,8 @@ args = ARGV.dup
 
 if line
   args.each_with_index do |a, i|
-    n = a.rindex(":")
-    args[i] = [a[0...n], a[n+1..-1]]
+    parts = a.reverse.split(':', 3).map{|s| s.reverse}.reverse
+    args[i] = parts[0..1] if parts.length > 1
   end
 end
 
